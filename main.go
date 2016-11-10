@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"syscall"
-	"unsafe"
 	"net/http"
 	"io"
 	"io/ioutil"
@@ -11,8 +10,9 @@ import (
 )
 
 const (
-	PING string = "0"
-	ACCEPT string = "1"
+	PING byte = 0x00
+	ACCEPT byte = 0x01
+	BACK byte = 0x02
 )
 
 type errorString struct {
@@ -31,14 +31,40 @@ var (
 )
 
 func main() {
-	//err := initialize()
-	//if err != nil {
-	//	fmt.Println("Init:", err)
-	//	// block
-	//}
-	go startProxyServer()
+	err := initialize()
+	if err != nil {
+		fmt.Println("Init:", err)
+		// block
+	}
 
-	testServer()
+	fmt.Println("ping")
+	err = sendDataSkno(PING, 0)
+	if err != nil {
+		fmt.Println("Ping:", err)
+		// block
+	}
+	fmt.Println("accept")
+	err = sendDataSkno(ACCEPT, 12000)
+	if err != nil {
+		fmt.Println("Accept:", err)
+		// block
+	}
+	fmt.Println("back")
+	err = sendDataSkno(BACK, 11000)
+	if err != nil {
+		fmt.Println("Back:", err)
+		// block
+	}
+
+	fmt.Println("close")
+	err = closeSkno()
+	if err != nil {
+		fmt.Println("Close:", err)
+		// block
+	}
+	//go startProxyServer()
+	//
+	//testServer()
 
 	//testClient()
 
@@ -87,9 +113,9 @@ func closeSkno() error {
 	return nil
 }
 
-func sendDataSkno(eventType string, value int) error {
+func sendDataSkno(eventType byte, value int) error {
 	ret, _, err := sendEventSknoDll.Call(
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(eventType))),
+		uintptr(eventType),
 		uintptr(value),
 	)
 	if err != nil {
@@ -99,6 +125,7 @@ func sendDataSkno(eventType string, value int) error {
 		str := fmt.Sprintf("Returned %d", ret)
 		return &errorString{str}
 	}
+	fmt.Println(ret)
 
 	return nil
 }
