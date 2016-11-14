@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -10,19 +9,27 @@ import (
 	"time"
 	"encoding/json"
 	"bytes"
+	"regexp"
+	"log"
+	"gopkg.in/gcfg.v1"
 )
 
 const (
 	PING byte = 0x00
 	ACCEPT byte = 0x01
-	BACK byte = 0x02
-
-	TARGET_URI string = ""
-	PRO_HOST string = "http://192.168.100.54:8001"
+	//BACK byte = 0x02
 )
 
 type errorString struct {
 	s string
+}
+
+type Connection struct {
+	ProHost string
+}
+
+type Config struct {
+	Connection Connection
 }
 
 func (e *errorString) Error() string {
@@ -38,6 +45,8 @@ var (
 	sknoConnected bool = false
 
 	tickChan = time.NewTicker(time.Second * 55).C
+
+	cfg Config
 )
 
 type Payment struct {
@@ -49,17 +58,14 @@ type Order struct {
 }
 
 func main() {
-
-	//fmt.Println("accept")
-	//sendDataSkno(ACCEPT, 12000)
+	err := gcfg.ReadFileInto(&cfg, "conf.gcfg")
+	if err != nil {
+		fmt.Println("error:", err)
+	}
 
 	go startProxyServer()
-	//
-	//testServer()
 
-	//testClient()
-
-	fmt.Println("Initialize")
+	log.Println("Initialize")
 	initialize()
 
 	go func() {
@@ -67,13 +73,13 @@ func main() {
 			select {
 			case <-tickChan:
 				if sknoConnected {
-					fmt.Println("ping")
+					log.Println("ping")
 					err := sendDataSkno(PING, 0)
 					if err != nil {
-						fmt.Println("Ping:", err)
+						log.Println("Ping:", err)
 					}
 				} else {
-					fmt.Println("Initialize")
+					log.Println("Initialize")
 					initialize()
 				}
 			}
@@ -87,22 +93,22 @@ func main() {
 func initialize() error {
 	err := openSknoDll.Find()
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return err
 	}
 	err = closeSknoDll.Find()
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return err
 	}
 	err = sendEventSknoDll.Find()
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return err
 	}
 	ret, _, err := openSknoDll.Call()
 	//if err != nil {
-	//	fmt.Println(err)
+	//	log.Println(err)
 	//}
 	if ret != 1 {
 		str := fmt.Sprintf("Returned %d", ret)
@@ -117,7 +123,7 @@ func initialize() error {
 func closeSkno() error {
 	ret, _, _ := closeSknoDll.Call()
 	//if err != nil {
-	//	fmt.Println(err)
+	//	log.Println(err)
 	//}
 	if ret != 1 {
 		str := fmt.Sprintf("Returned %d", ret)
@@ -133,7 +139,7 @@ func sendDataSkno(eventType byte, value int) error {
 		uintptr(value),
 	)
 	//if err != nil {
-	//	fmt.Println(err)
+	//	log.Println(err)
 	//}
 	if ret != 1 {
 		str := fmt.Sprintf("Returned %d", ret)
@@ -146,40 +152,40 @@ func sendDataSkno(eventType byte, value int) error {
 	return nil
 }
 
-func target(parentResp http.ResponseWriter, parentReq *http.Request) {
-	if parentReq.Method == "POST" {
-		//params := parentReq.URL.Query()
-		//orderId := params.Get(":orderId")
-
-		decoder := json.NewDecoder(parentReq.Body)
-		var o Order
-		err := decoder.Decode(&o)
-		if err != nil {
-			panic(err)
-			defer parentReq.Body.Close()
-		}
-		fmt.Println(o.Payment.TotalPayed)
-		if o.Payment.TotalPayed != 0 {
-			val := int(o.Payment.TotalPayed * 10000)
-			fmt.Println("accept", val)
-			sendDataSkno(ACCEPT, val)
-		}
-	}
-
-	proxy(parentResp, parentReq)
-}
-
 func proxy(parentResp http.ResponseWriter, parentReq *http.Request) {
 	client := &http.Client{}
 
-	fmt.Println(parentReq.Method, parentReq.RequestURI)
+	log.Println(parentReq.Method, parentReq.RequestURI)
 
 	body, _ := ioutil.ReadAll(parentReq.Body)
-	//fmt.Println(string(body))
-	clientReq, err := http.NewRequest(parentReq.Method, PRO_HOST + parentReq.RequestURI, bytes.NewBuffer(body))
+	//log.Println(string(body))
+	clientReq, err := http.NewRequest(parentReq.Method, cfg.Connection.ProHost + parentReq.RequestURI, bytes.NewBuffer(body))
 	if err != nil {
-		fmt.Println(string(body))
+		log.Println(string(body))
 		os.Exit(0)
+	}
+
+	fmt.Println(parentReq.RequestURI)
+	r := regexp.MustCompile(`^\/t-api\/v1\/order\/[0-9]+$`)
+	isTarget := r.MatchString(parentReq.RequestURI)
+	fmt.Println("isTarget: ", isTarget)
+	if parentReq.Method == "POST" && isTarget {
+		var o Order
+		err := json.Unmarshal(body, &o)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println(o.Payment.TotalPayed)
+			if o.Payment.TotalPayed != 0 {
+				val := int(o.Payment.TotalPayed * 10000)
+				go sendDataSkno(ACCEPT, val)
+			}
+		}
+	}
+
+	if !sknoConnected {
+		parentResp.WriteHeader(http.StatusForbidden)
+		return
 	}
 
 	c := http.Cookie{
@@ -201,15 +207,15 @@ func proxy(parentResp http.ResponseWriter, parentReq *http.Request) {
 
 	clientResp, err := client.Do(clientReq)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		os.Exit(0)
 	}
 	respBody, err := ioutil.ReadAll(clientResp.Body)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		os.Exit(0)
 	}
-	//fmt.Println(string(respBody))
+	//log.Println(string(respBody))
 	clientResp.Body.Close()
 	parentResp.Header().Set("Content-Type", clientResp.Header.Get("Content-Type"))
 	parentResp.Write(respBody)
@@ -218,55 +224,10 @@ func proxy(parentResp http.ResponseWriter, parentReq *http.Request) {
 func startProxyServer() {
 
 	http.HandleFunc("/", proxy)
-	http.HandleFunc("/t-api/v1/order/:orderId", target)
 	err := http.ListenAndServe("0.0.0.0:8888", nil)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
-	fmt.Println("Server proxy started")
-}
-
-func testClient() {
-	fmt.Println("Client send request")
-	resp, err := http.Get("http://127.0.0.1:8888")
-	if err != nil {
-		fmt.Println(err)
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	fmt.Println("Client: ", string(body))
-}
-
-func testServer() {
-	http.HandleFunc("/test/*", hello)
-	err := http.ListenAndServe(":9999", nil)
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	fmt.Println("Server started")
-}
-
-func hello(res http.ResponseWriter, req *http.Request) {
-	res.Header().Set(
-		"Content-Type",
-		"text/html",
-	)
-	postData := ""
-	if req.Method == "POST" {
-		postData = req.FormValue("bbb")
-	}
-	io.WriteString(
-		res,
-		`<doctype html>
-<html>
-	<head>
-		<title>Hello World</title>
-	</head>
-	<body>
-		Hello World! ` + postData + `
-	</body>
-</html>`,
-	)
+	log.Println("Server proxy started")
 }

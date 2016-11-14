@@ -1,0 +1,4 @@
+; Comment line
+[connection]
+proHost = http://192.168.100.54:8001
+; proHost = http://daroo.pro
