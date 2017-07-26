@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"os"
 	"syscall"
 	"time"
 	"encoding/json"
@@ -107,9 +106,9 @@ func initialize() error {
 		return err
 	}
 	ret, _, err := openSknoDll.Call()
-	//if err != nil {
-	//	log.Println(err)
-	//}
+	if err != nil {
+		log.Println(err)
+	}
 	if ret != 1 {
 		str := fmt.Sprintf("Returned %d", ret)
 		return &errorString{str}
@@ -162,7 +161,8 @@ func proxy(parentResp http.ResponseWriter, parentReq *http.Request) {
 	clientReq, err := http.NewRequest(parentReq.Method, cfg.Connection.ProHost + parentReq.RequestURI, bytes.NewBuffer(body))
 	if err != nil {
 		log.Println(string(body))
-		os.Exit(0)
+		log.Println("exit: can`t clone request")
+		return
 	}
 
 	fmt.Println(parentReq.RequestURI)
@@ -208,12 +208,14 @@ func proxy(parentResp http.ResponseWriter, parentReq *http.Request) {
 	clientResp, err := client.Do(clientReq)
 	if err != nil {
 		log.Println(err)
-		os.Exit(0)
+		log.Println("exit: can`t connect to client")
+		return
 	}
 	respBody, err := ioutil.ReadAll(clientResp.Body)
 	if err != nil {
 		log.Println(err)
-		os.Exit(0)
+		log.Println("exit: can`t red body")
+		return
 	}
 	//log.Println(string(respBody))
 	clientResp.Body.Close()
